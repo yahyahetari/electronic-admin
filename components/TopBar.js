@@ -34,23 +34,6 @@ export default function TopBar() {
     };
   }, [router]);
 
-  // دالة تسجيل الخروج
-  const handleLogout = async () => {
-    try {
-      const response = await fetch("/api/deleteUser", {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        await signOut({ callbackUrl: "/" });
-      } else {
-        console.error("فشل في حذف المستخدم");
-      }
-    } catch (error) {
-      console.error("خطأ أثناء تسجيل الخروج:", error);
-    }
-  };
-
   useEffect(() => {
     const fetchOrders = async () => {
       try {
@@ -75,6 +58,18 @@ export default function TopBar() {
     setDropdownMenu(!dropdownMenu);
     if (hasNewOrders) {
       setHasNewOrders(false);
+    }
+  };
+
+  // دالة تسجيل الخروج
+  const handleLogout = async () => {
+    try {
+      await signOut({ 
+        redirect: true,
+        callbackUrl: '/'
+      });
+    } catch (error) {
+      console.error("خطأ في تسجيل الخروج:", error);
     }
   };
 

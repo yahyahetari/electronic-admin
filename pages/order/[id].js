@@ -84,7 +84,7 @@ export default function Order() {
                             {order.items && order.items.map((item, index) => (
                                 <li key={item._id.$oid}>
                                     <div className="flex items-start">
-                                        <img src={item.image} alt={item.title} className="w-16 h-16 object-cover rounded-md ml-2" />
+                                        <img src={item.image} alt={item.title} className="w-16 h-full object-cover rounded-md ml-2" />
                                         <div>
                                             <p className="font-semibold text-gray-200">{item.title}</p>
                                             <p className="text-gray-300">

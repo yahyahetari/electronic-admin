@@ -1,4 +1,4 @@
-import { useSession, signIn } from "next-auth/react";
+import { useSession, signIn, signOut } from "next-auth/react";
 import Nav from "./Nav";
 import TopBar from "./TopBar";
 import { useMediaQuery } from "react-responsive";
@@ -26,6 +26,10 @@ export default function Layout({ children }) {
   const [showVerification, setShowVerification] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
 
+  // States لإظهار/إخفاء كلمة المرور
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+
   useEffect(() => {
     if (session?.user) {
       if (router.pathname === '/auth/signin') {
@@ -34,8 +38,15 @@ export default function Layout({ children }) {
       setIsVerified(!!session.user.isVerified);
     }
   }, [session, router]);
-  
-  
+
+  // دالة إظهار/إخفاء كلمة المرور
+  const togglePasswordVisibility = (field) => {
+    if (field === 'signup') {
+      setShowSignupPassword(!showSignupPassword);
+    } else if (field === 'login') {
+      setShowLoginPassword(!showLoginPassword);
+    }
+  };
 
   const handleTabClick = (e, tab) => {
     e.preventDefault();
@@ -51,6 +62,30 @@ export default function Layout({ children }) {
     }));
   };
 
+  const checkUserExists = async (email) => {
+    try {
+      console.log('🔍 Checking if user exists:', email);
+      const response = await axios.get(`/api/check-user-exists?email=${encodeURIComponent(email)}`);
+      console.log('✅ User exists data:', response.data);
+      return response.data.exists === true;
+    } catch (error) {
+      console.error('❌ Error checking user existence:', error);
+      return false;
+    }
+  };
+
+  const checkUserVerificationStatus = async (email) => {
+    try {
+      console.log('🔍 Checking verification for:', email);
+      const response = await axios.get(`/api/user-verification-status?email=${encodeURIComponent(email)}`);
+      console.log('✅ User verification data:', response.data);
+      return response.data.isVerified === true;
+    } catch (error) {
+      console.error('❌ Error checking verification:', error);
+      return false;
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -60,15 +95,72 @@ export default function Layout({ children }) {
           setError('الاسم الكامل يجب أن يكون 10 أحرف على الأقل');
           return;
         }
-        const response = await axios.post('/api/auth/signup', {
-          name: formData.signup_full_name,
-          email: formData.signup_email,
-          password: formData.signup_password
-        });
-        if (response.data.success) {
-          await handleSignIn(formData.signup_email, formData.signup_password);
+        
+        try {
+          const response = await axios.post('/api/auth/signup', {
+            name: formData.signup_full_name,
+            email: formData.signup_email,
+            password: formData.signup_password
+          });
+          
+          if (response.data.success) {
+            await handleSignIn(formData.signup_email, formData.signup_password);
+          }
+        } catch (signupError) {
+          // إذا كان المستخدم موجود لكن غير محقق
+          if (signupError.response?.data?.error && 
+              (signupError.response.data.error.includes('already exists') || 
+               signupError.response.data.error.includes('موجود'))) {
+            console.log('⚠️ User exists but may not be verified, checking status...');
+            const isVerified = await checkUserVerificationStatus(formData.signup_email);
+            
+            if (!isVerified) {
+              console.log('📧 User not verified, sending verification code...');
+              const code = Math.floor(100000 + Math.random() * 900000).toString();
+              setVerificationCode(code);
+              
+              try {
+                await axios.post('/api/send-verification', { 
+                  email: formData.signup_email, 
+                  code 
+                });
+                setError('');
+                setShowVerification(true);
+              } catch (sendError) {
+                setError('فشل إرسال رمز التحقق');
+              }
+            } else {
+              setError('هذا البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول');
+              setActiveTab('login');
+              setFormData(prev => ({
+                ...prev,
+                login_email: formData.signup_email
+              }));
+            }
+          } else {
+            setError(signupError.response?.data?.error || 'فشل التسجيل');
+          }
         }
       } else {
+        // معالجة تسجيل الدخول
+        console.log('🔐 Attempting login for:', formData.login_email);
+        
+        // التحقق من وجود المستخدم أولاً
+        const userExists = await checkUserExists(formData.login_email);
+        console.log('👤 Does user exist?', userExists);
+        
+        if (!userExists) {
+          // المستخدم غير موجود - تحويله لفورم التسجيل
+          console.log('⚠️ User does not exist, redirecting to signup...');
+          setError('هذا البريد الإلكتروني غير مسجل. يرجى إنشاء حساب جديد');
+          setActiveTab('signup');
+          setFormData(prev => ({
+            ...prev,
+            signup_email: formData.login_email
+          }));
+          return;
+        }
+        
         await handleSignIn(formData.login_email, formData.login_password);
       }
     } catch (error) {
@@ -82,9 +174,38 @@ export default function Layout({ children }) {
       email,
       password,
     });
+    
     if (result.error) {
       setError(result.error);
-    } else {
+      return;
+    }
+
+    try {
+      // فحص حالة التحقق من قاعدة البيانات
+      const verificationResponse = await axios.get(`/api/user-verification-status?email=${encodeURIComponent(email)}`);
+      
+      if (verificationResponse.data.isVerified) {
+        // المستخدم محقق بالفعل، توجيهه مباشرة للصفحة الرئيسية
+        setIsVerified(true);
+        router.push('/');
+        return;
+      }
+      
+      // المستخدم غير محقق، إرسال رمز التحقق
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      setVerificationCode(code);
+      
+      try {
+        const response = await axios.post('/api/send-verification', { email, code });
+        setShowVerification(true);
+      } catch (error) {
+        console.error('فشل في إرسال رمز التحقق:', error.response?.data || error.message);
+        setError('فشل في إرسال رمز التحقق: ' + (error.response?.data?.details || error.message));
+      }
+      
+    } catch (verificationError) {
+      console.error('خطأ في فحص حالة التحقق:', verificationError);
+      // في حالة فشل فحص حالة التحقق، نتابع بإرسال الكود احتياطياً
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       setVerificationCode(code);
       
@@ -121,7 +242,6 @@ export default function Layout({ children }) {
     }
   };
   
-
   const scrollToTop = () => {
     if (mainRef.current) {
       mainRef.current.scrollTo({
@@ -211,15 +331,34 @@ export default function Layout({ children }) {
                     </div>
                     <div className="mb-8 relative">
                       <input
-                        type="password"
+                        type={showSignupPassword ? "text" : "password"}
                         required
                         name="signup_password"
                         value={formData.signup_password}
                         onChange={handleInputChange}
-                        className="text-lg w-full py-2.5 px-4 bg-transparent border border-[#01939c] text-white rounded-md transition-all duration-250 ease-in-out focus:outline-none focus:border-[#179b77]"
+                        className="text-lg w-full py-2.5 px-4 pr-12 bg-transparent border border-[#01939c] text-white rounded-md transition-all duration-250 ease-in-out focus:outline-none focus:border-[#179b77]"
                         placeholder="كلمة المرور"
                         autoComplete="new-password"
                       />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility('signup')}
+                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#01939c] hover:text-[#179b77] transition-colors duration-200"
+                      >
+                        {showSignupPassword ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+                            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+                            <line x1="2" y1="2" x2="22" y2="22"/>
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
                     </div>
                     <button type="submit" className="w-full py-2.5 px-0 text-xl font-normal bg-[#01939c] text-white rounded-2xl cursor-pointer transition-all duration-500 ease-in-out hover:bg-[#179b77]">تسجيل</button>
                   </form>
@@ -241,15 +380,34 @@ export default function Layout({ children }) {
                     </div>
                     <div className="mb-10 relative">
                       <input
-                        type="password"
+                        type={showLoginPassword ? "text" : "password"}
                         required
                         name="login_password"
                         value={formData.login_password}
                         onChange={handleInputChange}
-                        className="text-lg w-full py-2.5 px-4 bg-transparent border border-[#01939c] text-white rounded-md transition-all duration-250 ease-in-out focus:outline-none focus:border-[#179b77]"
+                        className="text-lg w-full py-2.5 px-4 pr-12 bg-transparent border border-[#01939c] text-white rounded-md transition-all duration-250 ease-in-out focus:outline-none focus:border-[#179b77]"
                         placeholder="كلمة المرور"
                         autoComplete="new-password"
                       />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility('login')}
+                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#01939c] hover:text-[#179b77] transition-colors duration-200"
+                      >
+                        {showLoginPassword ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
+                            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
+                            <line x1="2" y1="2" x2="22" y2="22"/>
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
                     </div>
                     <button type="submit" className="w-full py-2.5 px-0 text-xl font-normal bg-[#01939c] text-white rounded-2xl cursor-pointer transition-all duration-500 ease-in-out hover:bg-[#179b77]">تسجيل الدخول</button>
                   </form>

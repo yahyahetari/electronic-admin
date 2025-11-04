@@ -36,23 +36,15 @@ export default function Nav() {
     return () => clearInterval(interval);
   }, []);
 
-  const Logout = async () => {
+  // دالة تسجيل الخروج
+  const handleLogout = async () => {
     try {
-      // Delete the user
-      const response = await fetch("/api/deleteUser", {
-        method: "DELETE",
+      await signOut({ 
+        redirect: true,
+        callbackUrl: '/'
       });
-
-      if (response.ok) {
-        // If the user was successfully deleted, sign out
-        await signOut({ callbackUrl: "/" });
-      } else {
-        console.error("Failed to delete user");
-        // You can add error handling here
-      }
     } catch (error) {
-      console.error("Error during sign out:", error);
-      // You can add error handling here
+      console.error("خطأ في تسجيل الخروج:", error);
     }
   };
 
@@ -105,11 +97,11 @@ export default function Nav() {
             العملاء
           </a>
         </Link>
-        <button onClick={Logout} legacyBehavior>
-          <a className={pathname && pathname.includes("/Logout") ? activeLink : inactiveLink}>
+        <button onClick={handleLogout} className="w-full text-right">
+          <div className={pathname && pathname.includes("/logout") ? activeLink : inactiveLink}>
             <LogOut/>
             تسجيل الخروج
-          </a>
+          </div>
         </button>
       </nav>
     </nav>
