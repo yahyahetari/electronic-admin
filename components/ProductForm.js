@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Trash2, Upload } from "lucide-react";
+import { Trash2, Upload, Sparkles, Loader2 } from "lucide-react";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Loader from "./Loader";
@@ -26,9 +26,10 @@ export default function ProductForm({
     const [variants, setVariants] = useState(existingVariants || []);
     const [isUploading, setIsUploading] = useState(false);
     const [editingIndex, setEditingIndex] = useState(null);
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [aiError, setAiError] = useState('');
     const router = useRouter();
     const { page, ...rest } = router.query;
-
 
     useEffect(() => {
         async function fetchCategories() {
@@ -38,6 +39,207 @@ export default function ProductForm({
         }
         fetchCategories();
     }, [existingCategory]);
+
+    // دالة استخراج المعلومات بالذكاء الاصطناعي
+    async function analyzeImagesWithAI() {
+        if (!images || images.length === 0) {
+            setAiError('الرجاء رفع صورة واحدة على الأقل');
+            setTimeout(() => setAiError(''), 3000);
+            return;
+        }
+
+        // تحذير إذا لم يتم اختيار فئة
+        if (!category) {
+            const confirmWithoutCategory = confirm(
+                '⚠️ لم تختر فئة للمنتج!\n\n' +
+                'لأفضل النتائج، يُفضل اختيار الفئة أولاً حتى يتم تحديد الخصائص والعلامات المناسبة.\n\n' +
+                'هل تريد المتابعة بدون فئة؟'
+            );
+            
+            if (!confirmWithoutCategory) {
+                return;
+            }
+        }
+
+        setIsAnalyzing(true);
+        setAiError('');
+
+        try {
+            console.log('📊 البيانات المرسلة:');
+            console.log('- الخصائص المتاحة:', propertiesArray);
+            console.log('- العلامات المتاحة:', availableTags);
+            console.log('- الفئات:', categories.map(c => c.name));
+
+            const response = await axios.post('/api/analyze-product', {
+                imageUrl: images[0],
+                availableProperties: propertiesArray.length > 0 ? propertiesArray : null,
+                availableTags: availableTags.length > 0 ? availableTags : null,
+                categories: categories.map(cat => ({ 
+                    _id: cat._id, 
+                    name: cat.name,
+                    parent: cat.parent ? cat.parent._id : null 
+                }))
+            });
+
+            const productData = response.data;
+            console.log('✅ البيانات المستلمة:', productData);
+            
+            // تطبيق اسم المنتج
+            if (productData.name) {
+                setTitle(productData.name);
+            }
+            
+            // تطبيق الوصف
+            if (productData.description) {
+                setDescription(productData.description);
+            }
+            
+            // البحث عن الفئة المطابقة (فقط الفئات الفرعية)
+            if (productData.category && categories.length > 0) {
+                const subCategories = categories.filter(cat => cat.parent);
+                
+                if (subCategories.length === 0) {
+                    console.log('⚠️ لا توجد فئات فرعية متاحة');
+                    alert('⚠️ تنبيه: لا توجد فئات فرعية متاحة\n\nيرجى إضافة فئة فرعية مناسبة للمنتج أولاً.');
+                } else {
+                    let matchedCategory = subCategories.find(cat => 
+                        cat.name.trim().toLowerCase() === productData.category.trim().toLowerCase()
+                    );
+                    
+                    if (!matchedCategory) {
+                        matchedCategory = subCategories.find(cat => {
+                            const catNameLower = cat.name.toLowerCase();
+                            const productCategoryLower = productData.category.toLowerCase();
+                            return catNameLower.includes(productCategoryLower) || 
+                                   productCategoryLower.includes(catNameLower);
+                        });
+                    }
+                    
+                    if (matchedCategory) {
+                        console.log('✅ تم العثور على الفئة الفرعية:', matchedCategory.name);
+                        setCategory(matchedCategory._id);
+                        
+                        setTimeout(() => {
+                            updateTags(categories, matchedCategory._id);
+                        }, 100);
+                    } else {
+                        const availableSubCategories = subCategories.map(cat => `  • ${cat.name}`).join('\n');
+                        
+                        console.log('⚠️ لم يتم العثور على فئة فرعية مطابقة:', productData.category);
+                        alert(
+                            `❌ لم يتم العثور على فئة فرعية مناسبة للمنتج\n\n` +
+                            `الفئة المقترحة من الذكاء الاصطناعي: "${productData.category}"\n\n` +
+                            `الفئات الفرعية المتاحة حالياً:\n${availableSubCategories}\n\n` +
+                            `📝 يرجى من المسؤول إضافة فئة فرعية جديدة باسم "${productData.category}" أو اختيار فئة مناسبة يدوياً.`
+                        );
+                    }
+                }
+            }
+            
+            // تطبيق المتغيرات المتعددة
+            let validVariants = [];
+            if (productData.variants && productData.variants.length > 0 && propertiesArray.length > 0) {
+                console.log(`🔍 معالجة ${productData.variants.length} متغير...`);
+                
+                productData.variants.forEach((variant, index) => {
+                    const newVariantProperties = {};
+                    let isValidVariant = true;
+                    
+                    if (variant.properties && variant.properties.length > 0) {
+                        variant.properties.forEach(extractedProp => {
+                            const matchingProperty = propertiesArray.find(availableProp => 
+                                availableProp.name.toLowerCase().trim() === extractedProp.name.toLowerCase().trim()
+                            );
+                            
+                            if (matchingProperty) {
+                                const matchingValue = matchingProperty.values.find(availableValue =>
+                                    availableValue.toLowerCase().trim() === extractedProp.value.toLowerCase().trim()
+                                );
+                                
+                                if (matchingValue) {
+                                    newVariantProperties[matchingProperty.name] = [matchingValue];
+                                } else {
+                                    isValidVariant = false;
+                                    console.log(`⚠️ متغير ${index + 1}: القيمة "${extractedProp.value}" غير موجودة في "${matchingProperty.name}"`);
+                                }
+                            } else {
+                                isValidVariant = false;
+                                console.log(`⚠️ متغير ${index + 1}: الخاصية "${extractedProp.name}" غير موجودة`);
+                            }
+                        });
+                        
+                        if (isValidVariant && Object.keys(newVariantProperties).length > 0) {
+                            validVariants.push({
+                                properties: newVariantProperties,
+                                price: Number(variant.price) || 100,
+                                cost: Number(variant.cost) || 60,
+                                stock: Number(variant.stock) || 10
+                            });
+                            console.log(`✅ متغير ${index + 1}: صالح`);
+                        }
+                    }
+                });
+                
+                if (validVariants.length > 0) {
+                    setVariants(validVariants);
+                    console.log(`✅ تم إضافة ${validVariants.length} متغير`);
+                } else {
+                    console.log('⚠️ لم يتم إنشاء أي متغير صالح');
+                }
+            }
+            
+            // تطبيق العلامات المرجعية
+            if (productData.tags && Array.isArray(productData.tags) && availableTags.length > 0) {
+                const matchedTags = [];
+                
+                productData.tags.forEach(extractedTag => {
+                    const matchingTag = availableTags.find(availableTag =>
+                        availableTag.toLowerCase().trim() === extractedTag.toLowerCase().trim()
+                    );
+                    
+                    if (matchingTag) {
+                        matchedTags.push(matchingTag);
+                        console.log(`✅ علامة: ${matchingTag}`);
+                    } else {
+                        console.log(`⚠️ العلامة "${extractedTag}" غير موجودة في القائمة المتاحة`);
+                    }
+                });
+                
+                if (matchedTags.length > 0) {
+                    setSelectedTags(matchedTags);
+                    console.log(`✅ تم إضافة ${matchedTags.length} علامة`);
+                }
+            }
+            
+            alert(
+                '✅ تم استخراج معلومات المنتج بنجاح!\n\n' + 
+                `📦 تم إضافة ${validVariants.length} متغير\n\n` +
+                'يمكنك الآن مراجعة البيانات وتعديلها حسب الحاجة.'
+            );
+            
+        } catch (err) {
+            console.error('❌ خطأ في تحليل الصورة:', err);
+            
+            let errorMessage = 'حدث خطأ أثناء تحليل الصورة';
+            
+            if (err.response?.data?.error) {
+                errorMessage = err.response.data.error;
+                
+                if (err.response.data.hint) {
+                    errorMessage += '\n\n💡 ' + err.response.data.hint;
+                }
+            } else if (err.message) {
+                errorMessage = err.message;
+            }
+            
+            setAiError(errorMessage);
+            setTimeout(() => setAiError(''), 7000);
+            
+            alert('❌ فشل استخراج المعلومات\n\n' + errorMessage);
+        } finally {
+            setIsAnalyzing(false);
+        }
+    }
 
     function VariantManager() {
         const [variantPrice, setVariantPrice] = useState('');
@@ -200,88 +402,180 @@ export default function ProductForm({
         );
     }
 
-    function VariantsList() {
-        // تجميع المتغيرات حسب التكلفة، السعر، والخاصية الثانية
-        const groupedVariants = variants.reduce((groups, variant) => {
-            const { price, cost } = variant;
+   // استبدل دالة VariantsList في ProductForm.js بهذا التصميم الأوضح:
 
-            // اختيار الخاصية الثانية ديناميكيًا للتجميع
-            const propertyKeys = Object.keys(variant.properties);
-            const secondPropertyKey = propertyKeys[1] || propertyKeys[0]; // اختيار الخاصية الثانية أو الأولى في حال عدم وجود خاصية ثانية
-            const secondPropertyValue = variant.properties[secondPropertyKey]?.[0] || ''; // الحصول على القيمة
+function VariantsList() {
+    if (variants.length === 0) return null;
 
-            // إنشاء مفتاح للتجميع بناءً على التكلفة، السعر، والخاصية الثانية
-            const groupKey = `${cost}-${price}-${secondPropertyValue}`;
+    // دالة لاختيار أفضل خاصية للتجميع
+    const getBestGroupingProperty = (variants) => {
+        if (variants.length === 0) return null;
+        
+        const propertyKeys = Object.keys(variants[0].properties);
+        if (propertyKeys.length === 0) return null;
+        
+        const priorityOrder = ['التخزين', 'اللون', 'المقاس', 'الحجم'];
+        
+        for (const priority of priorityOrder) {
+            const found = propertyKeys.find(key => 
+                key.toLowerCase().includes(priority.toLowerCase())
+            );
+            if (found) return found;
+        }
+        
+        return propertyKeys.length > 1 ? propertyKeys[1] : propertyKeys[0];
+    };
 
-            if (!groups[groupKey]) {
-                groups[groupKey] = {
-                    cost,
-                    price,
-                    mainProperty: secondPropertyKey,
-                    mainValue: secondPropertyValue,
-                    variants: []
-                };
-            }
-            groups[groupKey].variants.push(variant);
-            return groups;
-        }, {});
+    const groupingProperty = getBestGroupingProperty(variants);
+    
+    // تجميع المتغيرات
+    const groupedVariants = variants.reduce((groups, variant) => {
+        const { price, cost } = variant;
+        const groupByValue = variant.properties[groupingProperty]?.[0] || '';
+        
+        const groupKey = `${cost}-${price}-${groupByValue}`;
 
-        return (
-            <div className="mb-4">
-                <h3>المتغيرات الحالية</h3>
-                <div className="md:flex gap-2">
-                    {Object.values(groupedVariants).map((group, groupIndex) => (
-                        <div key={groupIndex} className="mb-6 bg-glass/30 p-4 rounded-lg">
-                            <div className="mb-2">
-                                <h4 className="text-lg">{group.mainProperty}: {group.mainValue}</h4>
-                                <div className="flex gap-2 text-sm text-gray-300">
-                                    <span>التكلفة: {group.cost} ريال</span>
-                                    <span>السعر: {group.price} ريال</span>
+        if (!groups[groupKey]) {
+            groups[groupKey] = {
+                cost,
+                price,
+                groupByProperty: groupingProperty,
+                groupByValue: groupByValue,
+                variants: []
+            };
+        }
+        
+        groups[groupKey].variants.push(variant);
+        return groups;
+    }, {});
+
+    return (
+        <div className="mb-6 w-full">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4 pb-3 border-b-2 border-glass/50">
+                <h3 className="text-2xl font-bold text-white">المتغيرات الحالية</h3>
+                <span className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 py-2 rounded-full text-sm font-bold">
+                    {variants.length} متغير
+                </span>
+            </div>
+            
+            {/* Groups Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                {Object.values(groupedVariants).map((group, groupIndex) => {
+                    const totalStock = group.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+                    
+                    return (
+                        <div 
+                            key={groupIndex} 
+                            className="bg-gradient-to-br from-glass/40 to-glass/20 backdrop-blur-sm p-5 rounded-xl border-2 border-glass/40 hover:border-h-glass/60 transition-all duration-300 shadow-lg"
+                        >
+                            {/* رأس المجموعة */}
+                            <div className="mb-4">
+                                {/* العنوان الرئيسي */}
+                                <div className="flex items-center gap-2 mb-3">
+                                    <div className="bg-h-glass px-3 py-1 rounded-lg">
+                                        <span className="text-xs text-gray-300 block">
+                                            {group.groupByProperty}
+                                        </span>
+                                        <span className="text-lg font-bold text-white block">
+                                            {group.groupByValue}
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                {/* معلومات السعر والمخزون */}
+                                <div className="grid grid-cols-3 gap-2">
+                                    <div className="bg-black/60 p-2 rounded-lg text-center">
+                                        <div className="text-xs text-gray-400 mb-1">التكلفة</div>
+                                        <div className="text-base font-bold text-white">{group.cost}</div>
+                                        <div className="text-xs text-gray-400">ريال</div>
+                                    </div>
+                                    <div className="bg-green-600/30 p-2 rounded-lg text-center border border-green-500/50">
+                                        <div className="text-xs text-gray-300 mb-1">السعر</div>
+                                        <div className="text-base font-bold text-green-300">{group.price}</div>
+                                        <div className="text-xs text-gray-300">ريال</div>
+                                    </div>
+                                    <div className="bg-blue-600/30 p-2 rounded-lg text-center border border-blue-500/50">
+                                        <div className="text-xs text-gray-300 mb-1">المخزون</div>
+                                        <div className="text-base font-bold text-blue-300">{totalStock}</div>
+                                        <div className="text-xs text-gray-300">قطعة</div>
+                                    </div>
                                 </div>
                             </div>
-                            <div className="flex gap-2 flex-col">
-                                {group.variants.map((variant, index) => (
-                                    <div key={index} className="flex gap-2 border-b border-glass/50 pb-2">
-                                        {/* عرض الخصائص الأخرى عدا الخاصية الرئيسية المستخدمة في التجميع */}
-                                        {Object.entries(variant.properties)
-                                            .filter(([key]) => key !== group.mainProperty)
-                                            .map(([key, values]) => (
-                                                <span key={key} className="bg-glass p-1 rounded">
-                                                    {key}: {values.join(', ')}
-                                                </span>
-                                            ))}
-                                        <div className="flex gap-0.5 items-center">
-                                            <span className="bg-glass p-1 rounded">المخزون: {variant.stock}</span>
+                            
+                            {/* المتغيرات */}
+                            <div className="space-y-2">
+                                {group.variants.map((variant, variantIndex) => {
+                                    const otherProperties = Object.entries(variant.properties)
+                                        .filter(([key]) => key !== group.groupByProperty);
+                                    
+                                    return (
+                                        <div 
+                                            key={variantIndex} 
+                                            className="bg-black/40 p-3 rounded-lg border border-glass/50 hover:bg-glass/60 hover:border-h-glass/60 transition-all duration-200"
+                                        >
+                                            {/* الخصائص والمخزون */}
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex gap-2 flex-wrap flex-1">
+                                                    {otherProperties.length > 0 ? (
+                                                        otherProperties.map(([key, values]) => (
+                                                            <div 
+                                                                key={key} 
+                                                                className="bg-black/80 px-3 py-1 rounded-md"
+                                                            >
+                                                                <span className="text-xs text-gray-300">{key}: </span>
+                                                                <span className="text-sm font-bold text-white">
+                                                                    {values.join(', ')}
+                                                                </span>
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <span className="text-xs text-gray-400 italic">
+                                                            بدون خصائص إضافية
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                
+                                                {/* المخزون الفردي */}
+                                                <div className="bg-blue-600/40 px-3 py-1 rounded-md border border-blue-500/50 whitespace-nowrap">
+                                                    <span className="text-sm font-bold text-blue-200">
+                                                        {variant.stock} قطعة
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* أزرار التحكم */}
+                                            <div className="flex gap-2 mt-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setEditingIndex(variants.indexOf(variant))}
+                                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-bold transition-all duration-200 shadow-md hover:shadow-lg"
+                                                >
+                                                    ✏️ تعديل
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (confirm('هل أنت متأكد من حذف هذا المتغير؟')) {
+                                                            setVariants(prev => prev.filter(v => v !== variant));
+                                                        }
+                                                    }}
+                                                    className="flex-1 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-lg text-sm font-bold transition-all duration-200 shadow-md hover:shadow-lg"
+                                                >
+                                                    🗑️ حذف
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div className="flex gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => setEditingIndex(variants.indexOf(variant))}
-                                                className="bg-blue-500 text-white px-2 py-1 rounded"
-                                            >
-                                                تعديل
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    if (confirm('هل أنت متأكد من حذف هذا المتغير؟')) {
-                                                        setVariants(prev => prev.filter(v => v !== variant));
-                                                    }
-                                                }}
-                                                className="bg-red-500 text-white px-2 py-1 rounded"
-                                            >
-                                                حذف
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
-                    ))}
-                </div>
+                    );
+                })}
             </div>
-        );
-    }
+        </div>
+    );
+}
 
     async function saveProducts(ev) {
         ev.preventDefault();
@@ -297,7 +591,6 @@ export default function ProductForm({
         try {
             if (_id) {
                 await axios.put('/api/products', { ...data, _id });
-                // نستخدم router.back() للعودة للصفحة السابقة مباشرة
                 router.back();
             } else {
                 const response = await axios.post('/api/products', data);
@@ -307,7 +600,6 @@ export default function ProductForm({
             console.error('Error saving product:', error.response?.data || error.message);
         }
     }
-
 
     async function uploadImages(ev) {
         const files = ev.target?.files;
@@ -390,6 +682,72 @@ export default function ProductForm({
     return (
         <form onSubmit={saveProducts}>
             <div className="flex flex-col justify-start items-start h-full p-4">
+                <label>صور المنتج</label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                    <ReactSortable list={images} className="flex flex-wrap" setList={imagesOrdering}>
+                        {!!images?.length && images.map(Link => (
+                            <div key={Link} className="relative w-44 h-56 p-2 rounded-md">
+                                <img src={Link} alt="product image" className="w-full h-full object-cover border rounded-lg cursor-move" />
+                                <button
+                                    type="button"
+                                    onClick={() => removeImage(Link)}
+                                    className="absolute top-2 right-2 bg-red-700 text-white p-0.5 rounded-lg m-1">
+                                    <Trash2 className="w-5" />
+                                </button>
+                            </div>
+                        ))}
+                    </ReactSortable>
+                    {isUploading && (
+                        <div className="flex items-center justify-between p-2 rounded-md">
+                            <Loader />
+                        </div>
+                    )}
+                    <label className="w-32 mb-4 h-24 mt-8 cursor-pointer bg-gray-400 text-gray-800 rounded-lg text-center flex flex-col items-center justify-center text-xl">
+                        <Upload className="w-32 h-12 text-gray-800" />
+                        <div>اضف الصور</div>
+                        <input
+                            type="file"
+                            className="hidden"
+                            onChange={uploadImages}
+                            multiple={true}
+                        />
+                    </label>
+                </div>
+
+                {/* زر استخراج المعلومات بالذكاء الاصطناعي */}
+                {images.length > 0 && (
+                    <div className="w-full mb-6">
+                        <button
+                            type="button"
+                            onClick={analyzeImagesWithAI}
+                            disabled={isAnalyzing}
+                            className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-3 px-6 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg"
+                        >
+                            {isAnalyzing ? (
+                                <>
+                                    <Loader2 className="w-5 h-5 animate-spin" />
+                                    <span>جاري استخراج المعلومات من الصورة...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Sparkles className="w-5 h-5" />
+                                    <span>استخراج معلومات المنتج بالذكاء الاصطناعي</span>
+                                </>
+                            )}
+                        </button>
+                        {aiError && (
+                            <div className="mt-2 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
+                                {aiError}
+                            </div>
+                        )}
+                        {isAnalyzing && (
+                            <p className="mt-2 text-sm text-gray-600 text-center">
+                                ⏳ يتم تحليل الصورة... قد يستغرق هذا بضع ثوانٍ
+                            </p>
+                        )}
+                    </div>
+                )}
+
                 <label>اسم المنتج</label>
                 <input
                     type="text"
@@ -416,6 +774,7 @@ export default function ProductForm({
 
                 <VariantManager />
                 <VariantsList />
+                
                 <label>علامات المنتج المرجعية</label>
                 <div className="flex flex-wrap gap-2 mb-4">
                     <button
@@ -442,36 +801,6 @@ export default function ProductForm({
                     ))}
                 </div>
 
-                <label>صور المنتج</label>
-                <div className="mt-2 flex flex-wrap gap-2">
-                    <ReactSortable list={images} className="flex flex-wrap" setList={imagesOrdering}>
-                        {!!images?.length && images.map(Link => (
-                            <div key={Link} className="relative w-44 h-56 p-2 rounded-md">
-                                <img src={Link} alt="product image" className="w-full h-full object-cover border rounded-lg cursor-move" />
-                                <button
-                                    onClick={() => removeImage(Link)}
-                                    className="absolute top-2 right-2 bg-red-700 text-white p-0.5 rounded-lg m-1">
-                                    <Trash2 className="w-5" />
-                                </button>
-                            </div>
-                        ))}
-                    </ReactSortable>
-                    {isUploading && (
-                        <div className="flex items-center justify-between p-2 rounded-md">
-                            <Loader />
-                        </div>
-                    )}
-                    <label className="w-32 mb-4 h-24 mt-8 cursor-pointer bg-gray-400 text-gray-800 rounded-lg text-center flex flex-col items-center justify-center text-xl">
-                        <Upload className="w-32 h-12 text-gray-800" />
-                        <div>اضف الصور</div>
-                        <input
-                            type="file"
-                            className="hidden"
-                            onChange={uploadImages}
-                            multiple={true}
-                        />
-                    </label>
-                </div>
                 <button type="submit" className="bg-h-glass hover:bg-glass mt-6 text-white py-2 px-4 rounded-full">
                     حفظ المنتج
                 </button>
