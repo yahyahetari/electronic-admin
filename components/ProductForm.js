@@ -41,205 +41,247 @@ export default function ProductForm({
     }, [existingCategory]);
 
     // دالة استخراج المعلومات بالذكاء الاصطناعي
-    async function analyzeImagesWithAI() {
-        if (!images || images.length === 0) {
-            setAiError('الرجاء رفع صورة واحدة على الأقل');
-            setTimeout(() => setAiError(''), 3000);
+
+async function analyzeImagesWithAI() {
+    if (!images || images.length === 0) {
+        setAiError('الرجاء رفع صورة واحدة على الأقل');
+        setTimeout(() => setAiError(''), 3000);
+        return;
+    }
+
+    // تحذير إذا لم يتم اختيار فئة
+    if (!category) {
+        const confirmWithoutCategory = confirm(
+            '⚠️ لم تختر فئة للمنتج!\n\n' +
+            'لأفضل النتائج، يُفضل اختيار الفئة أولاً حتى يتم تحديد الخصائص والعلامات المناسبة.\n\n' +
+            'هل تريد المتابعة بدون فئة؟'
+        );
+
+        if (!confirmWithoutCategory) {
             return;
         }
+    }
 
-        // تحذير إذا لم يتم اختيار فئة
-        if (!category) {
-            const confirmWithoutCategory = confirm(
-                '⚠️ لم تختر فئة للمنتج!\n\n' +
-                'لأفضل النتائج، يُفضل اختيار الفئة أولاً حتى يتم تحديد الخصائص والعلامات المناسبة.\n\n' +
-                'هل تريد المتابعة بدون فئة؟'
-            );
+    setIsAnalyzing(true);
+    setAiError('');
 
-            if (!confirmWithoutCategory) {
-                return;
+    try {
+        console.log('📊 البيانات المرسلة:');
+        console.log('- عدد الصور:', images.length);
+        console.log('- الخصائص المتاحة:', propertiesArray);
+        console.log('- العلامات المتاحة:', availableTags);
+        console.log('- الفئات:', categories.map(c => c.name));
+
+        // إرسال جميع الصور بدلاً من صورة واحدة
+        const response = await axios.post('/api/analyze-product', {
+            imageUrls: images, // إرسال جميع الصور
+            availableProperties: propertiesArray.length > 0 ? propertiesArray : null,
+            availableTags: availableTags.length > 0 ? availableTags : null,
+            categories: categories.map(cat => ({
+                _id: cat._id,
+                name: cat.name,
+                parent: cat.parent ? cat.parent._id : null
+            }))
+        });
+
+        const productData = response.data;
+        console.log('✅ البيانات المستلمة:', productData);
+
+        // تطبيق اسم المنتج
+        if (productData.name) {
+            setTitle(productData.name);
+        }
+
+        // تطبيق الوصف
+        if (productData.description) {
+            setDescription(productData.description);
+        }
+
+        // البحث عن الفئة المطابقة (فقط الفئات الفرعية)
+        if (productData.category && categories.length > 0) {
+            const subCategories = categories.filter(cat => cat.parent);
+
+            if (subCategories.length === 0) {
+                console.log('⚠️ لا توجد فئات فرعية متاحة');
+                alert('⚠️ تنبيه: لا توجد فئات فرعية متاحة\n\nيرجى إضافة فئة فرعية مناسبة للمنتج أولاً.');
+            } else {
+                let matchedCategory = subCategories.find(cat =>
+                    cat.name.trim().toLowerCase() === productData.category.trim().toLowerCase()
+                );
+
+                if (!matchedCategory) {
+                    matchedCategory = subCategories.find(cat => {
+                        const catNameLower = cat.name.toLowerCase();
+                        const productCategoryLower = productData.category.toLowerCase();
+                        return catNameLower.includes(productCategoryLower) ||
+                            productCategoryLower.includes(catNameLower);
+                    });
+                }
+
+                if (matchedCategory) {
+                    console.log('✅ تم العثور على الفئة الفرعية:', matchedCategory.name);
+                    setCategory(matchedCategory._id);
+
+                    setTimeout(() => {
+                        updateTags(categories, matchedCategory._id);
+                    }, 100);
+                } else {
+                    const availableSubCategories = subCategories.map(cat => `  • ${cat.name}`).join('\n');
+
+                    console.log('⚠️ لم يتم العثور على فئة فرعية مطابقة:', productData.category);
+                    alert(
+                        `❌ لم يتم العثور على فئة فرعية مناسبة للمنتج\n\n` +
+                        `الفئة المقترحة من الذكاء الاصطناعي: "${productData.category}"\n\n` +
+                        `الفئات الفرعية المتاحة حالياً:\n${availableSubCategories}\n\n` +
+                        `📝 يرجى من المسؤول إضافة فئة فرعية جديدة باسم "${productData.category}" أو اختيار فئة مناسبة يدوياً.`
+                    );
+                }
             }
         }
 
-        setIsAnalyzing(true);
-        setAiError('');
+        // تطبيق المتغيرات المتعددة
+        let validVariants = [];
+        if (productData.variants && productData.variants.length > 0 && propertiesArray.length > 0) {
+            console.log(`🔍 معالجة ${productData.variants.length} متغير...`);
 
-        try {
-            console.log('📊 البيانات المرسلة:');
-            console.log('- الخصائص المتاحة:', propertiesArray);
-            console.log('- العلامات المتاحة:', availableTags);
-            console.log('- الفئات:', categories.map(c => c.name));
+            productData.variants.forEach((variant, index) => {
+                const newVariantProperties = {};
+                let isValidVariant = true;
 
-            const response = await axios.post('/api/analyze-product', {
-                imageUrl: images[0],
-                availableProperties: propertiesArray.length > 0 ? propertiesArray : null,
-                availableTags: availableTags.length > 0 ? availableTags : null,
-                categories: categories.map(cat => ({
-                    _id: cat._id,
-                    name: cat.name,
-                    parent: cat.parent ? cat.parent._id : null
-                }))
-            });
-
-            const productData = response.data;
-            console.log('✅ البيانات المستلمة:', productData);
-
-            // تطبيق اسم المنتج
-            if (productData.name) {
-                setTitle(productData.name);
-            }
-
-            // تطبيق الوصف
-            if (productData.description) {
-                setDescription(productData.description);
-            }
-
-            // البحث عن الفئة المطابقة (فقط الفئات الفرعية)
-            if (productData.category && categories.length > 0) {
-                const subCategories = categories.filter(cat => cat.parent);
-
-                if (subCategories.length === 0) {
-                    console.log('⚠️ لا توجد فئات فرعية متاحة');
-                    alert('⚠️ تنبيه: لا توجد فئات فرعية متاحة\n\nيرجى إضافة فئة فرعية مناسبة للمنتج أولاً.');
-                } else {
-                    let matchedCategory = subCategories.find(cat =>
-                        cat.name.trim().toLowerCase() === productData.category.trim().toLowerCase()
-                    );
-
-                    if (!matchedCategory) {
-                        matchedCategory = subCategories.find(cat => {
-                            const catNameLower = cat.name.toLowerCase();
-                            const productCategoryLower = productData.category.toLowerCase();
-                            return catNameLower.includes(productCategoryLower) ||
-                                productCategoryLower.includes(catNameLower);
-                        });
-                    }
-
-                    if (matchedCategory) {
-                        console.log('✅ تم العثور على الفئة الفرعية:', matchedCategory.name);
-                        setCategory(matchedCategory._id);
-
-                        setTimeout(() => {
-                            updateTags(categories, matchedCategory._id);
-                        }, 100);
-                    } else {
-                        const availableSubCategories = subCategories.map(cat => `  • ${cat.name}`).join('\n');
-
-                        console.log('⚠️ لم يتم العثور على فئة فرعية مطابقة:', productData.category);
-                        alert(
-                            `❌ لم يتم العثور على فئة فرعية مناسبة للمنتج\n\n` +
-                            `الفئة المقترحة من الذكاء الاصطناعي: "${productData.category}"\n\n` +
-                            `الفئات الفرعية المتاحة حالياً:\n${availableSubCategories}\n\n` +
-                            `📝 يرجى من المسؤول إضافة فئة فرعية جديدة باسم "${productData.category}" أو اختيار فئة مناسبة يدوياً.`
+                if (variant.properties && variant.properties.length > 0) {
+                    variant.properties.forEach(extractedProp => {
+                        const matchingProperty = propertiesArray.find(availableProp =>
+                            availableProp.name.toLowerCase().trim() === extractedProp.name.toLowerCase().trim()
                         );
-                    }
-                }
-            }
 
-            // تطبيق المتغيرات المتعددة
-            let validVariants = [];
-            if (productData.variants && productData.variants.length > 0 && propertiesArray.length > 0) {
-                console.log(`🔍 معالجة ${productData.variants.length} متغير...`);
-
-                productData.variants.forEach((variant, index) => {
-                    const newVariantProperties = {};
-                    let isValidVariant = true;
-
-                    if (variant.properties && variant.properties.length > 0) {
-                        variant.properties.forEach(extractedProp => {
-                            const matchingProperty = propertiesArray.find(availableProp =>
-                                availableProp.name.toLowerCase().trim() === extractedProp.name.toLowerCase().trim()
+                        if (matchingProperty) {
+                            const matchingValue = matchingProperty.values.find(availableValue =>
+                                availableValue.toLowerCase().trim() === extractedProp.value.toLowerCase().trim()
                             );
 
-                            if (matchingProperty) {
-                                const matchingValue = matchingProperty.values.find(availableValue =>
-                                    availableValue.toLowerCase().trim() === extractedProp.value.toLowerCase().trim()
-                                );
-
-                                if (matchingValue) {
-                                    newVariantProperties[matchingProperty.name] = [matchingValue];
-                                } else {
-                                    isValidVariant = false;
-                                    console.log(`⚠️ متغير ${index + 1}: القيمة "${extractedProp.value}" غير موجودة في "${matchingProperty.name}"`);
-                                }
+                            if (matchingValue) {
+                                newVariantProperties[matchingProperty.name] = [matchingValue];
                             } else {
                                 isValidVariant = false;
-                                console.log(`⚠️ متغير ${index + 1}: الخاصية "${extractedProp.name}" غير موجودة`);
+                                console.log(`⚠️ متغير ${index + 1}: القيمة "${extractedProp.value}" غير موجودة في "${matchingProperty.name}"`);
                             }
-                        });
-
-                        if (isValidVariant && Object.keys(newVariantProperties).length > 0) {
-                            validVariants.push({
-                                properties: newVariantProperties,
-                                price: Number(variant.price) || 100,
-                                cost: Number(variant.cost) || 60,
-                                stock: Number(variant.stock) || 10
-                            });
-                            console.log(`✅ متغير ${index + 1}: صالح`);
+                        } else {
+                            isValidVariant = false;
+                            console.log(`⚠️ متغير ${index + 1}: الخاصية "${extractedProp.name}" غير موجودة`);
                         }
+                    });
+
+                    if (isValidVariant && Object.keys(newVariantProperties).length > 0) {
+                        validVariants.push({
+                            properties: newVariantProperties,
+                            price: Number(variant.price) || 100,
+                            cost: Number(variant.cost) || 60,
+                            stock: Number(variant.stock) || 10
+                        });
+                        console.log(`✅ متغير ${index + 1}: صالح`);
                     }
-                });
-
-                if (validVariants.length > 0) {
-                    setVariants(validVariants);
-                    console.log(`✅ تم إضافة ${validVariants.length} متغير`);
-                } else {
-                    console.log('⚠️ لم يتم إنشاء أي متغير صالح');
                 }
+            });
+
+            if (validVariants.length > 0) {
+                setVariants(validVariants);
+                console.log(`✅ تم إضافة ${validVariants.length} متغير`);
+            } else {
+                console.log('⚠️ لم يتم إنشاء أي متغير صالح');
             }
-
-            // تطبيق العلامات المرجعية
-            if (productData.tags && Array.isArray(productData.tags) && availableTags.length > 0) {
-                const matchedTags = [];
-
-                productData.tags.forEach(extractedTag => {
-                    const matchingTag = availableTags.find(availableTag =>
-                        availableTag.toLowerCase().trim() === extractedTag.toLowerCase().trim()
-                    );
-
-                    if (matchingTag) {
-                        matchedTags.push(matchingTag);
-                        console.log(`✅ علامة: ${matchingTag}`);
-                    } else {
-                        console.log(`⚠️ العلامة "${extractedTag}" غير موجودة في القائمة المتاحة`);
-                    }
-                });
-
-                if (matchedTags.length > 0) {
-                    setSelectedTags(matchedTags);
-                    console.log(`✅ تم إضافة ${matchedTags.length} علامة`);
-                }
-            }
-
-            alert(
-                '✅ تم استخراج معلومات المنتج بنجاح!\n\n' +
-                `📦 تم إضافة ${validVariants.length} متغير\n\n` +
-                'يمكنك الآن مراجعة البيانات وتعديلها حسب الحاجة.'
-            );
-
-        } catch (err) {
-            console.error('❌ خطأ في تحليل الصورة:', err);
-
-            let errorMessage = 'حدث خطأ أثناء تحليل الصورة';
-
-            if (err.response?.data?.error) {
-                errorMessage = err.response.data.error;
-
-                if (err.response.data.hint) {
-                    errorMessage += '\n\n💡 ' + err.response.data.hint;
-                }
-            } else if (err.message) {
-                errorMessage = err.message;
-            }
-
-            setAiError(errorMessage);
-            setTimeout(() => setAiError(''), 7000);
-
-            alert('❌ فشل استخراج المعلومات\n\n' + errorMessage);
-        } finally {
-            setIsAnalyzing(false);
         }
+
+        // تطبيق العلامات المرجعية
+        if (productData.tags && Array.isArray(productData.tags) && availableTags.length > 0) {
+            const matchedTags = [];
+
+            productData.tags.forEach(extractedTag => {
+                const matchingTag = availableTags.find(availableTag =>
+                    availableTag.toLowerCase().trim() === extractedTag.toLowerCase().trim()
+                );
+
+                if (matchingTag) {
+                    matchedTags.push(matchingTag);
+                    console.log(`✅ علامة: ${matchingTag}`);
+                } else {
+                    console.log(`⚠️ العلامة "${extractedTag}" غير موجودة في القائمة المتاحة`);
+                }
+            });
+
+            if (matchedTags.length > 0) {
+                setSelectedTags(matchedTags);
+                console.log(`✅ تم إضافة ${matchedTags.length} علامة`);
+            }
+        }
+
+        // عرض معلومات الألوان المكتشفة
+        const colorsDetected = productData.colorsDetected || [];
+        const colorMessage = colorsDetected.length > 0 
+            ? `🎨 تم اكتشاف ${colorsDetected.length} لون: ${colorsDetected.join(', ')}\n` 
+            : '';
+
+        alert(
+            '✅ تم استخراج معلومات المنتج بنجاح!\n\n' +
+            colorMessage +
+            `📦 تم إضافة ${validVariants.length} متغير\n\n` +
+            'يمكنك الآن مراجعة البيانات وتعديلها حسب الحاجة.'
+        );
+
+    } catch (err) {
+        console.error('❌ خطأ في تحليل الصور:', err);
+
+        let errorMessage = 'حدث خطأ أثناء تحليل الصور';
+        let errorDetails = '';
+
+        if (err.response?.data) {
+            const errorData = err.response.data;
+            
+            // استخدام رسالة الخطأ من السيرفر
+            if (errorData.error) {
+                errorMessage = errorData.error;
+            }
+            
+            // إضافة التلميحات إن وجدت
+            if (errorData.hint) {
+                errorDetails = '💡 ' + errorData.hint;
+            }
+            
+            // تفاصيل إضافية
+            if (errorData.message) {
+                errorDetails += (errorDetails ? '\n\n' : '') + '🔍 ' + errorData.message;
+            }
+            
+            // حالات خاصة
+            if (err.response.status === 400) {
+                errorMessage = '⚠️ ' + errorMessage;
+            } else if (err.response.status === 429) {
+                errorMessage = '⏰ ' + errorMessage;
+            } else if (err.response.status === 500) {
+                errorMessage = '🔧 ' + errorMessage;
+            }
+            
+        } else if (err.message) {
+            if (err.message.includes('Network Error')) {
+                errorMessage = 'فشل الاتصال بالخادم';
+                errorDetails = '💡 تحقق من اتصال الإنترنت أو حاول لاحقاً';
+            } else if (err.message.includes('timeout')) {
+                errorMessage = 'انتهت مهلة الطلب';
+                errorDetails = '💡 الصور قد تكون كبيرة جداً، حاول تقليل عددها';
+            } else {
+                errorDetails = err.message;
+            }
+        }
+
+        const fullError = errorDetails ? `${errorMessage}\n\n${errorDetails}` : errorMessage;
+
+        setAiError(fullError);
+        setTimeout(() => setAiError(''), 10000); // 10 seconds
+
+        alert('❌ فشل استخراج المعلومات\n\n' + fullError);
+    } finally {
+        setIsAnalyzing(false);
     }
+}
 
     function VariantManager() {
         const [variantPrice, setVariantPrice] = useState('');
