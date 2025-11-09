@@ -1,10 +1,9 @@
-// pages/api/user-verification-status.js
+// pages/api/admin/user-verification-status.js
 import clientPromise from "@/lib/mongodb";
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
@@ -15,13 +14,13 @@ export default async function handler(req, res) {
     }
 
     const client = await clientPromise;
-    const usersCollection = client.db().collection("adminusers");
+    const db = client.db();
     
-    // البحث عن المستخدم في قاعدة البيانات
-    const user = await usersCollection.findOne({ email: email.toLowerCase() });
+    // البحث في collection الإداريين
+    const adminUsersCollection = db.collection("adminusers");
+    const user = await adminUsersCollection.findOne({ email: email.toLowerCase() });
     
     if (!user) {
-      // إرجاع 200 مع exists: false بدلاً من 404
       return res.status(200).json({ 
         exists: false,
         isVerified: false,
@@ -29,7 +28,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // إرجاع حالة التحقق
     return res.status(200).json({ 
       exists: true,
       isVerified: user.isVerified || false,
@@ -37,7 +35,7 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error('خطأ في التحقق من حالة المستخدم:', error);
+    console.error('خطأ في التحقق من حالة المستخدم الإداري:', error);
     return res.status(500).json({ 
       error: 'Internal server error',
       details: error.message 
