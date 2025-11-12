@@ -19,18 +19,10 @@ export default function Orders() {
     const fetchOrders = async () => {
         try {
             const response = await axios.get('/api/orders');
-            console.log('Fetched orders:', response.data.length);
             
             // طباعة تفاصيل أول طلب للتشخيص
             if (response.data.length > 0) {
                 const firstOrder = response.data[0];
-                console.log('Sample order:', {
-                    id: firstOrder._id?.slice(-6),
-                    paid: firstOrder.paid,
-                    paidType: typeof firstOrder.paid,
-                    status: firstOrder.status,
-                    statusType: typeof firstOrder.status
-                });
             }
             
             const sortedOrders = response.data.sort((a, b) =>

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>WAHA QR Code</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 50px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            max-width: 500px;
+            margin: 0 auto;
+            box-shadow: 0 10px 50px rgba(0,0,0,0.3);
+        }
+        h1 { 
+            color: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        #qr { 
+            margin: 20px 0;
+            border: 4px solid #25D366;
+            border-radius: 10px;
+            max-width: 100%;
+        }
+        button {
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s;
+        }
+        button:hover { 
+            background: #128C7E;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .warning { background: #fff3cd; color: #856404; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        .instructions {
+            text-align: right;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            color: #333;
+        }
+        .instructions ol {
+            margin: 10px 0;
+            padding-right: 20px;
+        }
+        .instructions li {
+            margin: 8px 0;
+        }
+        .debug {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #666;
+            text-align: left;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔗 ربط واتساب مع WAHA</h1>
+        <div id="status" class="status info">جاري التحميل...</div>
+        <div id="qr-container"></div>
+        <div>
+            <button onclick="restartAndGetQR()" id="restartBtn">🔄 إعادة التشغيل + QR</button>
+            <button onclick="getQR()" id="refreshBtn">📷 QR Code</button>
+            <button onclick="checkStatus()" id="statusBtn">📊 الحالة</button>
+        </div>
+        <div class="instructions" id="instructions" style="display:none;">
+            <strong>📱 خطوات الربط:</strong>
+            <ol>
+                <li>افتح واتساب على هاتفك</li>
+                <li>اذهب إلى: القائمة ← الأجهزة المرتبطة</li>
+                <li>اضغط على "ربط جهاز"</li>
+                <li>امسح الكود أعلاه</li>
+            </ol>
+        </div>
+        <div class="debug" id="debug"></div>
+    </div>
+
+    <script>
+        const API_KEY = 'd58d6dc2448b46f3a3e2f72040e60709';
+        const WAHA_URL = 'http://localhost:3001';
+        const SESSION = 'default';
+        let checkInterval;
+        let qrRetries = 0;
+        const MAX_QR_RETRIES = 10;
+
+        function log(message) {
+            const debugEl = document.getElementById('debug');
+            const time = new Date().toLocaleTimeString('ar-SA');
+            debugEl.innerHTML = `[${time}] ${message}<br>` + debugEl.innerHTML;
+            console.log(message);
+        }
+
+        async function restartAndGetQR() {
+            try {
+                setStatus('🔄 جاري إعادة تشغيل الجلسة...', 'info');
+                disableButtons(true);
+                
+                log('Restarting session...');
+                
+                const restartResponse = await fetch(`${WAHA_URL}/api/sessions/${SESSION}/restart`, {
+                    method: 'POST',
+                    headers: { 'X-Api-Key': API_KEY }
+                });
+                
+                if (restartResponse.ok) {
+                    log('Session restarted successfully');
+                    setStatus('⏳ انتظر 7 ثواني...', 'warning');
+                    
+                    // Wait for WAHA to generate QR
+                    await new Promise(resolve => setTimeout(resolve, 7000));
+                    
+                    qrRetries = 0;
+                    await getQR();
+                } else {
+                    throw new Error(`Restart failed: ${restartResponse.status}`);
+                }
+            } catch (error) {
+                log('Restart error: ' + error.message);
+                setStatus('❌ فشلت إعادة التشغيل: ' + error.message, 'error');
+            } finally {
+                disableButtons(false);
+            }
+        }
+
+        async function getQR() {
+            try {
+                setStatus('جاري تحميل QR Code...', 'info');
+                log(`Fetching QR (attempt ${qrRetries + 1}/${MAX_QR_RETRIES})...`);
+                
+                const response = await fetch(`${WAHA_URL}/api/${SESSION}/auth/qr`, {
+                    headers: { 
+                        'X-Api-Key': API_KEY
+                    }
+                });
+                
+                log(`QR Response status: ${response.status}`);
+                
+                if (!response.ok) {
+                    if (response.status === 404 && qrRetries < MAX_QR_RETRIES) {
+                        qrRetries++;
+                        log(`QR not ready yet, retrying in 2 seconds...`);
+                        setStatus(`⏳ QR غير جاهز، إعادة المحاولة (${qrRetries}/${MAX_QR_RETRIES})...`, 'warning');
+                        setTimeout(getQR, 2000);
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                // Get content type
+                const contentType = response.headers.get('content-type');
+                log(`Content-Type: ${contentType}`);
+                
+                // Try to get QR as image directly
+                const blob = await response.blob();
+                const imageUrl = URL.createObjectURL(blob);
+                
+                // Check if it's actually an image
+                if (blob.type.startsWith('image/')) {
+                    log('QR Code image received!');
+                    document.getElementById('qr-container').innerHTML = 
+                        `<img id="qr" src="${imageUrl}" alt="QR Code" width="300">`;
+                    setStatus('✅ QR Code جاهز! امسحه الآن', 'success');
+                    document.getElementById('instructions').style.display = 'block';
+                    qrRetries = 0;
+                    
+                    // Start checking status
+                    if (checkInterval) clearInterval(checkInterval);
+                    checkInterval = setInterval(checkStatus, 3000);
+                } else {
+                    // Try as JSON
+                    const text = await blob.text();
+                    log('Response: ' + text.substring(0, 100));
+                    
+                    const data = JSON.parse(text);
+                    if (data.qr) {
+                        document.getElementById('qr-container').innerHTML = 
+                            `<img id="qr" src="${data.qr}" alt="QR Code" width="300">`;
+                        setStatus('✅ QR Code جاهز!', 'success');
+                        document.getElementById('instructions').style.display = 'block';
+                        qrRetries = 0;
+                    } else {
+                        throw new Error('QR data not found in response');
+                    }
+                }
+                
+            } catch (error) {
+                log('QR Error: ' + error.message);
+                setStatus('❌ فشل: ' + error.message, 'error');
+                
+                if (qrRetries < MAX_QR_RETRIES) {
+                    qrRetries++;
+                    log(`Retrying in 3 seconds... (${qrRetries}/${MAX_QR_RETRIES})`);
+                    setTimeout(getQR, 3000);
+                } else {
+                    setStatus('❌ فشل بعد عدة محاولات. جرب "إعادة التشغيل + QR"', 'error');
+                }
+            }
+        }
+
+        async function checkStatus() {
+            try {
+                const response = await fetch(`${WAHA_URL}/api/sessions/${SESSION}`, {
+                    headers: { 'X-Api-Key': API_KEY }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                log(`Status: ${data.status}`);
+                
+                if (data.status === 'WORKING') {
+                    if (checkInterval) clearInterval(checkInterval);
+                    
+                    const accountName = data.me?.pushname || data.me?.id || 'غير معروف';
+                    setStatus('✅ متصل بنجاح! ' + accountName, 'success');
+                    log('Connected successfully as: ' + accountName);
+                    
+                    document.getElementById('qr-container').innerHTML = 
+                        '<div style="color:#25D366; font-size:80px;">✓</div>' +
+                        '<p style="color:#333; font-size:18px;">تم الربط بنجاح!</p>';
+                    document.getElementById('instructions').style.display = 'none';
+                    
+                } else if (data.status === 'SCAN_QR_CODE') {
+                    setStatus('⏳ في انتظار مسح QR Code...', 'warning');
+                } else {
+                    setStatus('📱 الحالة: ' + data.status, 'warning');
+                }
+                
+            } catch (error) {
+                log('Status check error: ' + error.message);
+            }
+        }
+
+        function setStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status ' + type;
+            statusEl.innerText = message;
+        }
+
+        function disableButtons(disabled) {
+            document.getElementById('restartBtn').disabled = disabled;
+            document.getElementById('refreshBtn').disabled = disabled;
+            document.getElementById('statusBtn').disabled = disabled;
+        }
+
+        window.onload = async () => {
+            log('WAHA QR Interface started');
+            await checkStatus();
+            
+            setTimeout(() => {
+                const statusEl = document.getElementById('status');
+                if (!statusEl.innerText.includes('متصل')) {
+                    log('Not connected, will try to get QR in 2 seconds');
+                    setTimeout(getQR, 2000);
+                }
+            }, 1000);
+        };
+
+        window.onbeforeunload = () => {
+            if (checkInterval) clearInterval(checkInterval);
+        };
+    </script>
+</body>
+</html>
